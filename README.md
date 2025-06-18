@@ -20,3 +20,15 @@ pyinstaller --onedir --windowed --add-data "DOGDETECTED.mp3:." --add-data "yolov
 # Your executable will be in the dist/ folder
 # Run: ./dist/DogDetector
 ```
+
+
+### Docker Run command
+
+```bash
+docker run -d \
+  --name dog-detector \
+  -p 5001:5001 \
+  --device /dev/video0:/dev/video0 \
+  --privileged \
+  athomasson2/dogdetector:latest
+```
