@@ -21,8 +21,14 @@ pyinstaller --onedir --windowed --add-data "DOGDETECTED.mp3:." --add-data "yolov
 # Run: ./dist/DogDetector
 ```
 
+### To stop mac from quarenteening the files in DogDetector folder from the binary zip
 
-### Docker Run command
+```bash
+xattr -rd com.apple.quarantine DogDetector
+```
+
+
+### Docker Run command (DOcker is not working for some reason)
 
 ```bash
 docker run -d \
