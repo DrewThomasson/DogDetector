@@ -72,10 +72,17 @@
             position: relative;
         }
 
-        #videoStream {
+        #videoElement {
             max-width: 100%;
             max-height: 100%;
             border-radius: 10px;
+        }
+
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
         }
 
         .video-placeholder {
@@ -296,10 +303,12 @@
             <div class="video-section">
                 <h2 style="margin-bottom: 15px;">📹 Live Camera Feed</h2>
                 <div class="video-container">
-                    <img id="videoStream" style="display: none;" alt="Video Stream">
+                    <video id="videoElement" autoplay muted style="display: none;"></video>
+                    <canvas id="canvas" style="display: none;"></canvas>
                     <div id="videoPlaceholder" class="video-placeholder">
                         Camera feed will appear here<br>
-                        Click 'Start Detection' to begin
+                        Click 'Start Detection' to begin<br>
+                        <small>Your browser will ask for camera permission</small>
                     </div>
                 </div>
             </div>
@@ -322,8 +331,8 @@
                             <div class="stat-label">Dogs Detected</div>
                         </div>
                         <div class="stat-card">
-                            <div id="soundStatus" class="stat-number">❌</div>
-                            <div class="stat-label">Sound Ready</div>
+                            <div id="soundStatus" class="stat-number">🔊</div>
+                            <div class="stat-label">Browser Audio</div>
                         </div>
                     </div>
                 </div>
@@ -337,11 +346,6 @@
                 <div class="settings-form">
                     <h3>Settings</h3>
                     
-                    <div class="form-group">
-                        <label for="cameraIndex">Camera Index:</label>
-                        <input type="number" id="cameraIndex" value="0" min="0" max="10">
-                    </div>
-
                     <div class="form-group">
                         <label for="confidence">Confidence Threshold:</label>
                         <input type="number" id="confidence" value="0.5" min="0.1" max="1.0" step="0.1">
@@ -379,6 +383,19 @@
         // Initialize Socket.IO connection
         const socket = io();
 
+        // Camera and detection variables
+        let videoElement = document.getElementById('videoElement');
+        let canvas = document.getElementById('canvas');
+        let ctx = canvas.getContext('2d');
+        let videoStream = null;
+        let isDetecting = false;
+        let detectionInterval = null;
+
+        // Audio context for sound alerts
+        let audioContext;
+        let soundEnabled = true;
+        let soundVolume = 0.7;
+
         // DOM elements
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
@@ -387,29 +404,246 @@
         const statusText = document.getElementById('statusText');
         const detectionAlert = document.getElementById('detectionAlert');
         const detectionCount = document.getElementById('detectionCount');
-        const soundStatus = document.getElementById('soundStatus');
-        const videoStream = document.getElementById('videoStream');
         const videoPlaceholder = document.getElementById('videoPlaceholder');
         const logContainer = document.getElementById('logContainer');
 
         // Settings elements
-        const cameraIndex = document.getElementById('cameraIndex');
         const confidence = document.getElementById('confidence');
         const cooldown = document.getElementById('cooldown');
-        const soundEnabled = document.getElementById('soundEnabled');
+        const soundEnabledCheckbox = document.getElementById('soundEnabled');
         const volume = document.getElementById('volume');
 
-        // State
-        let isRunning = false;
+        // Initialize audio context on first user interaction
+        function initAudio() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        // Create a beep sound
+        function playBeep(frequency = 800, duration = 500) {
+            if (!soundEnabled) return;
+            
+            initAudio();
+            
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+            oscillator.type = 'sine';
+            
+            gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+            gainNode.gain.linearRampToValueAtTime(soundVolume * 0.3, audioContext.currentTime + 0.01);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + duration / 1000);
+            
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + duration / 1000);
+        }
+
+        // Play dog alert sound
+        function playDogAlert() {
+            if (!soundEnabled) return;
+            
+            playBeep(800, 200);
+            setTimeout(() => playBeep(1000, 200), 250);
+            setTimeout(() => playBeep(800, 200), 500);
+        }
+
+        // Start camera
+        async function startCamera() {
+            try {
+                videoStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        width: { ideal: 640 }, 
+                        height: { ideal: 480 } 
+                    } 
+                });
+                
+                videoElement.srcObject = videoStream;
+                videoElement.style.display = 'block';
+                videoPlaceholder.style.display = 'none';
+                
+                // Setup canvas for drawing detection boxes
+                videoElement.addEventListener('loadedmetadata', () => {
+                    canvas.width = videoElement.videoWidth;
+                    canvas.height = videoElement.videoHeight;
+                    canvas.style.display = 'block';
+                    canvas.style.width = videoElement.offsetWidth + 'px';
+                    canvas.style.height = videoElement.offsetHeight + 'px';
+                });
+                
+                addLogEntry('Camera started successfully');
+                return true;
+            } catch (error) {
+                console.error('Error accessing camera:', error);
+                addLogEntry('Error accessing camera: ' + error.message);
+                alert('Could not access camera. Please ensure you have granted camera permissions.');
+                return false;
+            }
+        }
+
+        // Stop camera
+        function stopCamera() {
+            if (videoStream) {
+                videoStream.getTracks().forEach(track => track.stop());
+                videoStream = null;
+            }
+            
+            videoElement.style.display = 'none';
+            canvas.style.display = 'none';
+            videoPlaceholder.style.display = 'block';
+            
+            addLogEntry('Camera stopped');
+        }
+
+        // Capture frame and send for processing
+        async function processFrame() {
+            if (!isDetecting || !videoElement.videoWidth) return;
+            
+            // Draw current video frame to canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+            
+            // Convert canvas to base64
+            const frameData = canvas.toDataURL('image/jpeg', 0.8);
+            
+            try {
+                const response = await fetch('/api/process_frame', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ frame: frameData })
+                });
+                
+                const result = await response.json();
+                
+                if (result.dogs_detected) {
+                    // Draw detection boxes
+                    drawDetections(result.detections);
+                } else {
+                    // Clear detection boxes
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                }
+                
+            } catch (error) {
+                console.error('Error processing frame:', error);
+            }
+        }
+
+        // Draw detection boxes on canvas
+        function drawDetections(detections) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            detections.forEach(detection => {
+                // Draw red bounding box
+                ctx.strokeStyle = '#ff0000';
+                ctx.lineWidth = 3;
+                ctx.strokeRect(detection.x1, detection.y1, 
+                              detection.x2 - detection.x1, detection.y2 - detection.y1);
+                
+                // Draw label
+                const label = `DOG! ${(detection.confidence * 100).toFixed(1)}%`;
+                ctx.fillStyle = '#ff0000';
+                ctx.fillRect(detection.x1, detection.y1 - 25, ctx.measureText(label).width + 10, 25);
+                
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '16px Arial';
+                ctx.fillText(label, detection.x1 + 5, detection.y1 - 5);
+            });
+        }
 
         // Event listeners
-        startBtn.addEventListener('click', startDetection);
-        stopBtn.addEventListener('click', stopDetection);
-        testSoundBtn.addEventListener('click', testSound);
+        startBtn.addEventListener('click', async () => {
+            initAudio();
+            
+            if (await startCamera()) {
+                const settings = {
+                    confidence: parseFloat(confidence.value),
+                    cooldown: parseInt(cooldown.value)
+                };
+
+                try {
+                    const response = await fetch('/api/start', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(settings)
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        isDetecting = true;
+                        startBtn.disabled = true;
+                        stopBtn.disabled = false;
+                        statusDot.classList.add('running');
+                        statusText.textContent = 'Running';
+                        
+                        // Start processing frames
+                        detectionInterval = setInterval(processFrame, 100); // 10 FPS
+                        
+                        addLogEntry(result.message);
+                    } else {
+                        addLogEntry('Error: ' + result.message);
+                        stopCamera();
+                    }
+                } catch (error) {
+                    console.error('Error starting detection:', error);
+                    addLogEntry('Error starting detection: ' + error.message);
+                    stopCamera();
+                }
+            }
+        });
+
+        stopBtn.addEventListener('click', async () => {
+            try {
+                const response = await fetch('/api/stop', { method: 'POST' });
+                const result = await response.json();
+                
+                if (result.success) {
+                    isDetecting = false;
+                    
+                    if (detectionInterval) {
+                        clearInterval(detectionInterval);
+                        detectionInterval = null;
+                    }
+                    
+                    stopCamera();
+                    
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    statusDot.classList.remove('running');
+                    statusText.textContent = 'Not Running';
+                    detectionAlert.textContent = 'No Dogs Detected';
+                    detectionAlert.className = 'detection-alert no-dog';
+                    
+                    addLogEntry(result.message);
+                }
+            } catch (error) {
+                console.error('Error stopping detection:', error);
+                addLogEntry('Error stopping detection: ' + error.message);
+            }
+        });
+
+        testSoundBtn.addEventListener('click', () => {
+            initAudio();
+            playDogAlert();
+            addLogEntry('Sound test triggered');
+        });
 
         // Settings change listeners
-        soundEnabled.addEventListener('change', updateSettings);
-        volume.addEventListener('input', updateSettings);
+        soundEnabledCheckbox.addEventListener('change', () => {
+            soundEnabled = soundEnabledCheckbox.checked;
+        });
+        
+        volume.addEventListener('input', () => {
+            soundVolume = parseFloat(volume.value);
+        });
 
         // Socket event listeners
         socket.on('connect', function() {
@@ -417,19 +651,16 @@
             addLogEntry('Connected to server');
         });
 
-        socket.on('video_frame', function(data) {
-            if (data.frame) {
-                videoStream.src = 'data:image/jpeg;base64,' + data.frame;
-                videoStream.style.display = 'block';
-                videoPlaceholder.style.display = 'none';
-            }
-        });
-
         socket.on('dog_alert', function(data) {
             if (data.detected) {
                 detectionAlert.textContent = `🚨 ${data.message} 🚨`;
                 detectionAlert.className = 'detection-alert dog-detected';
                 detectionCount.textContent = data.total;
+                
+                // Play sound alert
+                if (soundEnabled) {
+                    playDogAlert();
+                }
             } else {
                 detectionAlert.textContent = 'No Dogs Detected';
                 detectionAlert.className = 'detection-alert no-dog';
@@ -441,112 +672,8 @@
         });
 
         socket.on('status_update', function(data) {
-            updateStatus(data);
+            detectionCount.textContent = data.detection_count;
         });
-
-        // Functions
-        async function startDetection() {
-            const settings = {
-                camera_index: parseInt(cameraIndex.value),
-                confidence: parseFloat(confidence.value),
-                cooldown: parseInt(cooldown.value)
-            };
-
-            try {
-                const response = await fetch('/api/start', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(settings)
-                });
-
-                const result = await response.json();
-                
-                if (result.success) {
-                    isRunning = true;
-                    startBtn.disabled = true;
-                    stopBtn.disabled = false;
-                    statusDot.classList.add('running');
-                    statusText.textContent = 'Running';
-                    addLogEntry(result.message);
-                } else {
-                    addLogEntry('Error: ' + result.message);
-                    alert('Error: ' + result.message);
-                }
-            } catch (error) {
-                console.error('Error starting detection:', error);
-                addLogEntry('Error starting detection: ' + error.message);
-            }
-        }
-
-        async function stopDetection() {
-            try {
-                const response = await fetch('/api/stop', {
-                    method: 'POST'
-                });
-
-                const result = await response.json();
-                
-                if (result.success) {
-                    isRunning = false;
-                    startBtn.disabled = false;
-                    stopBtn.disabled = true;
-                    statusDot.classList.remove('running');
-                    statusText.textContent = 'Not Running';
-                    videoStream.style.display = 'none';
-                    videoPlaceholder.style.display = 'block';
-                    detectionAlert.textContent = 'No Dogs Detected';
-                    detectionAlert.className = 'detection-alert no-dog';
-                    addLogEntry(result.message);
-                }
-            } catch (error) {
-                console.error('Error stopping detection:', error);
-                addLogEntry('Error stopping detection: ' + error.message);
-            }
-        }
-
-        async function testSound() {
-            try {
-                const response = await fetch('/api/test_sound', {
-                    method: 'POST'
-                });
-                const result = await response.json();
-                addLogEntry('Sound test triggered');
-            } catch (error) {
-                console.error('Error testing sound:', error);
-                addLogEntry('Error testing sound: ' + error.message);
-            }
-        }
-
-        async function updateSettings() {
-            const settings = {
-                sound_enabled: soundEnabled.checked,
-                sound_volume: parseFloat(volume.value)
-            };
-
-            try {
-                const response = await fetch('/api/settings', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(settings)
-                });
-            } catch (error) {
-                console.error('Error updating settings:', error);
-            }
-        }
-
-        function updateStatus(status) {
-            if (status.sound_available) {
-                soundStatus.textContent = '✅';
-            } else {
-                soundStatus.textContent = '❌';
-            }
-            
-            detectionCount.textContent = status.detection_count;
-        }
 
         function addLogEntry(message) {
             const logEntry = document.createElement('div');
@@ -557,13 +684,10 @@
         }
 
         // Initialize
-        fetch('/api/status')
-            .then(response => response.json())
-            .then(status => updateStatus(status))
-            .catch(error => console.error('Error fetching status:', error));
-
         addLogEntry('Dog Detector Web App ready!');
-        addLogEntry('Connect a camera and click "Start Detection" to begin');
+        addLogEntry('🎥 Camera access handled by your browser');
+        addLogEntry('🔊 Audio alerts ready');
+        addLogEntry('Click "Start Detection" to begin');
     </script>
 </body>
 </html>
