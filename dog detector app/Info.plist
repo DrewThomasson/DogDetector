@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>Dog Detector</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.dogdetector.app</string>
+    <key>CFBundleName</key>
+    <string>DogDetector</string>
+    <key>CFBundleVersion</key>
+    <string>1.0.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>NSCameraUsageDescription</key>
+    <string>This app needs camera access to detect dogs in real-time video feed for alert purposes.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>This app may need microphone access for camera functionality.</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>10.13</string>
+</dict>
+</plist>

@@ -11,6 +11,15 @@ from PIL import Image, ImageTk
 import time
 import platform
 
+def resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
 class DogDetector:
     def __init__(self):
         self.root = tk.Tk()
@@ -20,8 +29,8 @@ class DogDetector:
         # Initialize pygame for sound
         pygame.mixer.init()
         
-        # Custom sound file path
-        self.sound_file = "DOGDETECTED.mp3"
+        # Custom sound file path - use resource_path for bundled resources
+        self.sound_file = resource_path("DOGDETECTED.mp3")
         
         # Check if sound file exists
         if os.path.exists(self.sound_file):
@@ -37,12 +46,24 @@ class DogDetector:
             print(f"Sound file not found: {self.sound_file}")
             self.dog_sound = None
         
-        # Load YOLO model (will download automatically if not present)
+        # Load YOLO model with bundled weights
         try:
-            self.model = YOLO('yolov8n.pt')  # nano version for speed
-            print("YOLO model loaded successfully!")
+            model_path = resource_path('yolov8n.pt')
+            print(f"Loading YOLO model from: {model_path}")
+            
+            if os.path.exists(model_path):
+                self.model = YOLO(model_path)
+                print("YOLO model loaded successfully from bundled file!")
+            else:
+                # Fallback to download if bundled file not found
+                print("Bundled model not found, attempting to download...")
+                self.model = YOLO('yolov8n.pt')
+                print("YOLO model downloaded and loaded successfully!")
+                
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load YOLO model: {e}")
+            error_msg = f"Failed to load YOLO model: {e}"
+            print(error_msg)
+            messagebox.showerror("Error", error_msg)
             sys.exit(1)
         
         # Camera variables
@@ -174,7 +195,7 @@ class DogDetector:
         # Sound file path display
         path_label = ttk.Label(settings_frame, text="Sound file:", font=("Arial", 8))
         path_label.pack(anchor=tk.W)
-        path_display = ttk.Label(settings_frame, text=self.sound_file, 
+        path_display = ttk.Label(settings_frame, text=os.path.basename(self.sound_file), 
                                font=("Arial", 8), foreground="gray")
         path_display.pack(anchor=tk.W, pady=(0, 10))
         
@@ -216,7 +237,7 @@ class DogDetector:
                 
                 # Play the sound
                 self.dog_sound.play()
-                print(f"Playing dog_detected.mp3 at volume {volume:.1f}")
+                print(f"Playing DOGDETECTED.mp3 at volume {volume:.1f}")
             else:
                 # Fallback beep if custom sound not available
                 self.play_fallback_beep()
@@ -441,7 +462,7 @@ class DogDetector:
         self.log_message(welcome_msg)
         
         if self.dog_sound:
-            self.log_message("🔊 Custom dog_detected.mp3 sound loaded!")
+            self.log_message("🔊 Custom DOGDETECTED.mp3 sound loaded!")
         else:
             self.log_message("🔊 Using fallback beep sound (custom MP3 not found)")
             
@@ -456,7 +477,6 @@ class DogDetector:
 if __name__ == "__main__":
     print("Starting Dog Detector with Custom Sound Alert...")
     print("Make sure you have a webcam connected!")
-    print("Custom sound file: /Users/drew/Downloads/dog_detected.mp3")
     
     app = DogDetector()
     app.run()
