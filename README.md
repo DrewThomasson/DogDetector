@@ -4,6 +4,7 @@ python program that detects dog and yells out DOG DETECTED!
 
 ### Python install (python3.10 env)
 `pip install -r requirements.txt`
+### Run python app with
 `python dog_detector.py`
 
 ### build with pyinstaller
