@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🐕 Dog Detector - Web App</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            padding: 20px;
+            min-height: 600px;
+        }
+
+        .video-section {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .video-container {
+            flex-grow: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            border-radius: 10px;
+            min-height: 400px;
+            position: relative;
+        }
+
+        #videoStream {
+            max-width: 100%;
+            max-height: 100%;
+            border-radius: 10px;
+        }
+
+        .video-placeholder {
+            color: white;
+            text-align: center;
+            font-size: 1.2em;
+        }
+
+        .controls-section {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .status-card {
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #dc3545;
+        }
+
+        .status-dot.running {
+            background: #28a745;
+        }
+
+        .detection-alert {
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: bold;
+            margin-bottom: 15px;
+            transition: all 0.3s ease;
+        }
+
+        .detection-alert.no-dog {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .detection-alert.dog-detected {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        .controls-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+
+        .btn-primary {
+            background: #007bff;
+            color: white;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-info {
+            background: #17a2b8;
+            color: white;
+        }
+
+        .btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .settings-form {
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 1em;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: auto;
+        }
+
+        .log-container {
+            background: #2d3748;
+            color: #e2e8f0;
+            border-radius: 10px;
+            padding: 15px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            line-height: 1.4;
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 2px 0;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #007bff;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .controls-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🐕 Dog Detector</h1>
+            <p>Real-time dog detection using AI computer vision</p>
+        </div>
+
+        <div class="main-content">
+            <div class="video-section">
+                <h2 style="margin-bottom: 15px;">📹 Live Camera Feed</h2>
+                <div class="video-container">
+                    <img id="videoStream" style="display: none;" alt="Video Stream">
+                    <div id="videoPlaceholder" class="video-placeholder">
+                        Camera feed will appear here<br>
+                        Click 'Start Detection' to begin
+                    </div>
+                </div>
+            </div>
+
+            <div class="controls-section">
+                <div class="status-card">
+                    <h3>Status</h3>
+                    <div class="status-indicator">
+                        <div id="statusDot" class="status-dot"></div>
+                        <span id="statusText">Not Running</span>
+                    </div>
+                    
+                    <div id="detectionAlert" class="detection-alert no-dog">
+                        No Dogs Detected
+                    </div>
+
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div id="detectionCount" class="stat-number">0</div>
+                            <div class="stat-label">Dogs Detected</div>
+                        </div>
+                        <div class="stat-card">
+                            <div id="soundStatus" class="stat-number">❌</div>
+                            <div class="stat-label">Sound Ready</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="controls-grid">
+                    <button id="startBtn" class="btn btn-primary">Start Detection</button>
+                    <button id="stopBtn" class="btn btn-danger" disabled>Stop Detection</button>
+                    <button id="testSoundBtn" class="btn btn-info" style="grid-column: 1 / -1;">Test Sound</button>
+                </div>
+
+                <div class="settings-form">
+                    <h3>Settings</h3>
+                    
+                    <div class="form-group">
+                        <label for="cameraIndex">Camera Index:</label>
+                        <input type="number" id="cameraIndex" value="0" min="0" max="10">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="confidence">Confidence Threshold:</label>
+                        <input type="number" id="confidence" value="0.5" min="0.1" max="1.0" step="0.1">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="cooldown">Alert Cooldown (seconds):</label>
+                        <input type="number" id="cooldown" value="2" min="1" max="10">
+                    </div>
+
+                    <div class="form-group">
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="soundEnabled" checked>
+                            <label for="soundEnabled">Enable Sound Alerts</label>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="volume">Volume:</label>
+                        <input type="range" id="volume" min="0" max="1" step="0.1" value="0.7">
+                    </div>
+                </div>
+
+                <div>
+                    <h3>Detection Log</h3>
+                    <div id="logContainer" class="log-container">
+                        <div class="log-entry">Waiting for activity...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize Socket.IO connection
+        const socket = io();
+
+        // DOM elements
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const testSoundBtn = document.getElementById('testSoundBtn');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const detectionAlert = document.getElementById('detectionAlert');
+        const detectionCount = document.getElementById('detectionCount');
+        const soundStatus = document.getElementById('soundStatus');
+        const videoStream = document.getElementById('videoStream');
+        const videoPlaceholder = document.getElementById('videoPlaceholder');
+        const logContainer = document.getElementById('logContainer');
+
+        // Settings elements
+        const cameraIndex = document.getElementById('cameraIndex');
+        const confidence = document.getElementById('confidence');
+        const cooldown = document.getElementById('cooldown');
+        const soundEnabled = document.getElementById('soundEnabled');
+        const volume = document.getElementById('volume');
+
+        // State
+        let isRunning = false;
+
+        // Event listeners
+        startBtn.addEventListener('click', startDetection);
+        stopBtn.addEventListener('click', stopDetection);
+        testSoundBtn.addEventListener('click', testSound);
+
+        // Settings change listeners
+        soundEnabled.addEventListener('change', updateSettings);
+        volume.addEventListener('input', updateSettings);
+
+        // Socket event listeners
+        socket.on('connect', function() {
+            console.log('Connected to server');
+            addLogEntry('Connected to server');
+        });
+
+        socket.on('video_frame', function(data) {
+            if (data.frame) {
+                videoStream.src = 'data:image/jpeg;base64,' + data.frame;
+                videoStream.style.display = 'block';
+                videoPlaceholder.style.display = 'none';
+            }
+        });
+
+        socket.on('dog_alert', function(data) {
+            if (data.detected) {
+                detectionAlert.textContent = `🚨 ${data.message} 🚨`;
+                detectionAlert.className = 'detection-alert dog-detected';
+                detectionCount.textContent = data.total;
+            } else {
+                detectionAlert.textContent = 'No Dogs Detected';
+                detectionAlert.className = 'detection-alert no-dog';
+            }
+        });
+
+        socket.on('log_message', function(data) {
+            addLogEntry(data.message);
+        });
+
+        socket.on('status_update', function(data) {
+            updateStatus(data);
+        });
+
+        // Functions
+        async function startDetection() {
+            const settings = {
+                camera_index: parseInt(cameraIndex.value),
+                confidence: parseFloat(confidence.value),
+                cooldown: parseInt(cooldown.value)
+            };
+
+            try {
+                const response = await fetch('/api/start', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(settings)
+                });
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    isRunning = true;
+                    startBtn.disabled = true;
+                    stopBtn.disabled = false;
+                    statusDot.classList.add('running');
+                    statusText.textContent = 'Running';
+                    addLogEntry(result.message);
+                } else {
+                    addLogEntry('Error: ' + result.message);
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                console.error('Error starting detection:', error);
+                addLogEntry('Error starting detection: ' + error.message);
+            }
+        }
+
+        async function stopDetection() {
+            try {
+                const response = await fetch('/api/stop', {
+                    method: 'POST'
+                });
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    isRunning = false;
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    statusDot.classList.remove('running');
+                    statusText.textContent = 'Not Running';
+                    videoStream.style.display = 'none';
+                    videoPlaceholder.style.display = 'block';
+                    detectionAlert.textContent = 'No Dogs Detected';
+                    detectionAlert.className = 'detection-alert no-dog';
+                    addLogEntry(result.message);
+                }
+            } catch (error) {
+                console.error('Error stopping detection:', error);
+                addLogEntry('Error stopping detection: ' + error.message);
+            }
+        }
+
+        async function testSound() {
+            try {
+                const response = await fetch('/api/test_sound', {
+                    method: 'POST'
+                });
+                const result = await response.json();
+                addLogEntry('Sound test triggered');
+            } catch (error) {
+                console.error('Error testing sound:', error);
+                addLogEntry('Error testing sound: ' + error.message);
+            }
+        }
+
+        async function updateSettings() {
+            const settings = {
+                sound_enabled: soundEnabled.checked,
+                sound_volume: parseFloat(volume.value)
+            };
+
+            try {
+                const response = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(settings)
+                });
+            } catch (error) {
+                console.error('Error updating settings:', error);
+            }
+        }
+
+        function updateStatus(status) {
+            if (status.sound_available) {
+                soundStatus.textContent = '✅';
+            } else {
+                soundStatus.textContent = '❌';
+            }
+            
+            detectionCount.textContent = status.detection_count;
+        }
+
+        function addLogEntry(message) {
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+            logEntry.textContent = message;
+            logContainer.appendChild(logEntry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        // Initialize
+        fetch('/api/status')
+            .then(response => response.json())
+            .then(status => updateStatus(status))
+            .catch(error => console.error('Error fetching status:', error));
+
+        addLogEntry('Dog Detector Web App ready!');
+        addLogEntry('Connect a camera and click "Start Detection" to begin');
+    </script>
+</body>
+</html>

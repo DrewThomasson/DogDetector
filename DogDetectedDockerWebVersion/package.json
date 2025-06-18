@@ -1,0 +1,15 @@
+{
+  "name": "dog-detector-web",
+  "version": "1.0.0",
+  "description": "Web-based dog detection app using AI computer vision",
+  "scripts": {
+    "build": "docker build -t dog-detector-web .",
+    "run": "docker-compose up -d",
+    "stop": "docker-compose down",
+    "logs": "docker-compose logs -f",
+    "dev": "python app.py"
+  },
+  "keywords": ["dog", "detection", "ai", "computer-vision", "flask", "docker"],
+  "author": "Your Name",
+  "license": "MIT"
+}

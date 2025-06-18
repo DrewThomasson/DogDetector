@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  dog-detector:
+    image: athomasson2/dogdetector:latest
+    ports:
+      - "5001:5001"
+    devices:
+      - /dev/video0:/dev/video0
+    volumes:
+      - ./DOGDETECTED.mp3:/app/DOGDETECTED.mp3:ro
+      - ./models:/app/models
+    environment:
+      - FLASK_ENV=production
+    restart: unless-stopped
+    privileged: true
