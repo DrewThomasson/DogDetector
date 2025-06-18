@@ -11,31 +11,11 @@ python program that detects dog and yells out DOG DETECTED!
 
 `pip install pyinstaller`
 
-#### For Mac
+#### For Mac ARM
 
 ```bash
 # Build the executable
-pyinstaller --onefile --windowed --add-data "DOGDETECTED.mp3:." --add-data "yolov8n.pt:." --add-data "requirements.txt:." --name "DogDetector" dog_detector.py
-
-# Your executable will be in the dist/ folder
-# Run: ./dist/DogDetector
-```
-
-#### For Windows
-
-```bash
-# Build the executable
-pyinstaller --onefile --windowed --add-data "DOGDETECTED.mp3;." --add-data "yolov8n.pt;." --add-data "requirements.txt;." --name "DogDetector" dog_detector.py
-
-# Your executable will be in the dist/ folder
-# Run: dist\DogDetector.exe
-```
-
-#### For Linux
-
-```bash
-# Build the executable
-pyinstaller --onefile --add-data "DOGDETECTED.mp3:." --add-data "yolov8n.pt:." --add-data "requirements.txt:." --name "DogDetector" dog_detector.py
+pyinstaller --onedir --windowed --add-data "DOGDETECTED.mp3:." --add-data "yolov8n.pt:." --add-data "Info.plist:." --hidden-import=ultralytics --hidden-import=PIL --hidden-import=PIL._tkinter_finder --collect-all ultralytics --collect-all torch --collect-all torchvision --name "DogDetector" --osx-bundle-identifier "com.dogdetector.app" dog_detector.py
 
 # Your executable will be in the dist/ folder
 # Run: ./dist/DogDetector
