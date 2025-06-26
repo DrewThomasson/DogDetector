@@ -284,17 +284,24 @@ class HeatmapWindow:
         self.parent = parent
         self.db_manager = db_manager
         self.window = tk.Toplevel(parent)
-        self.window.title("Detection Time Heatmaps")
-        self.window.geometry("1200x800")
+        self.window.title("Detection Time Heatmaps - Enhanced View")
+        self.window.geometry("1300x800")
         
         # Create notebook for tabs
         self.notebook = ttk.Notebook(self.window)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Create tabs for each detection type
+        # Specific combinations
         self.create_heatmap_tab("Dog Only", "dog_only")
         self.create_heatmap_tab("Person Only", "person_only")
         self.create_heatmap_tab("Dog & Person", "dog_and_person")
+        
+        # NEW: Aggregate views
+        self.create_heatmap_tab("🐕 All Dogs", "any_dog")
+        self.create_heatmap_tab("👤 All Persons", "any_person")
+        
+        # Overall view
         self.create_heatmap_tab("All Detections", None)
         
         # Controls frame
@@ -318,11 +325,77 @@ class HeatmapWindow:
                               command=self.show_statistics)
         stats_btn.pack(side=tk.LEFT, padx=10)
         
+        # Help button
+        help_btn = ttk.Button(controls_frame, text="ℹ️ Help", 
+                             command=self.show_help)
+        help_btn.pack(side=tk.LEFT, padx=10)
+        
         # Initial load
         self.refresh_all_heatmaps()
     
+    def show_help(self):
+        """Show help information about heatmap types"""
+        help_window = tk.Toplevel(self.window)
+        help_window.title("Heatmap Types - Help")
+        help_window.geometry("600x500")
+        
+        help_text = """🔍 HEATMAP TYPES EXPLAINED
+
+📊 SPECIFIC COMBINATIONS:
+• Dog Only: Only dogs detected (no people present)
+• Person Only: Only people detected (no dogs present)  
+• Dog & Person: Both dogs and people detected together
+
+🎯 AGGREGATE VIEWS:
+• 🐕 All Dogs: ANY detection with dogs (includes solo dogs + dogs with people)
+• 👤 All Persons: ANY detection with people (includes solo people + people with dogs)
+
+📈 OVERALL VIEW:
+• All Detections: Every detection event (dogs, people, or both)
+
+💡 USE CASES:
+
+🐕 All Dogs - Best for:
+✓ Understanding total dog activity patterns
+✓ Finding peak dog walking times
+✓ Analyzing when dogs are most active (regardless of human presence)
+
+👤 All Persons - Best for:
+✓ Understanding total human activity patterns  
+✓ Finding peak foot traffic times
+✓ Analyzing when people are most active (regardless of dog presence)
+
+🔍 Specific Types - Best for:
+✓ Understanding interaction patterns
+✓ Finding solo vs. accompanied activity
+✓ Analyzing behavior differences
+
+📊 Example Scenario:
+If you detect:
+- 10 "Dog Only" events
+- 5 "Person Only" events  
+- 8 "Dog & Person" events
+
+Then:
+- 🐕 All Dogs = 18 events (10 + 8)
+- 👤 All Persons = 13 events (5 + 8)
+- All Detections = 23 events (10 + 5 + 8)
+
+This gives you both detailed breakdowns AND big-picture patterns!"""
+        
+        text_widget = tk.Text(help_window, font=("Consolas", 10), padx=20, pady=20, wrap=tk.WORD)
+        text_widget.insert('1.0', help_text)
+        text_widget.config(state='disabled')
+        
+        # Add scrollbar
+        scrollbar = ttk.Scrollbar(help_window, orient="vertical", command=text_widget.yview)
+        text_widget.configure(yscrollcommand=scrollbar.set)
+        
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    
     def show_statistics(self):
-        """Show detailed statistics window"""
+        """Show detailed statistics window with enhanced breakdown"""
         try:
             days_back = int(self.days_var.get())
         except:
@@ -332,32 +405,48 @@ class HeatmapWindow:
         
         # Create statistics window
         stats_window = tk.Toplevel(self.window)
-        stats_window.title(f"Detection Statistics (Last {days_back} days)")
-        stats_window.geometry("400x300")
+        stats_window.title(f"Enhanced Detection Statistics (Last {days_back} days)")
+        stats_window.geometry("500x400")
         
-        # Statistics text
-        stats_text = f"""Detection Statistics (Last {days_back} days)
+        # Enhanced statistics text
+        stats_text = f"""📊 DETECTION STATISTICS (Last {days_back} days)
 
-Total Events: {stats.get('total_events', 0)}
+🎯 SPECIFIC COMBINATIONS:
+• Dogs Only: {stats.get('dog_only', 0)} events
+• Persons Only: {stats.get('person_only', 0)} events  
+• Dog & Person Together: {stats.get('dog_and_person', 0)} events
 
-Individual Categories:
-• Dogs Only: {stats.get('dog_only', 0)}
-• Persons Only: {stats.get('person_only', 0)}
-• Dog & Person Together: {stats.get('dog_and_person', 0)}
+📈 AGGREGATE TOTALS:
+• 🐕 All Dogs: {stats.get('total_dog_events', 0)} events
+• 👤 All Persons: {stats.get('total_person_events', 0)} events
+• 🎯 Total Events: {stats.get('total_events', 0)} events
 
-Overall Totals:
-• Total Dog Events: {stats.get('total_dog_events', 0)}
-• Total Person Events: {stats.get('total_person_events', 0)}
-
-Analysis:
+🔍 ANALYSIS:
 • Dog-Person Overlap: {stats.get('dog_person_overlap_pct', 0):.1f}%
 • Average Events/Day: {stats.get('total_events', 0) / days_back:.1f}
-"""
+• Dog Activity Rate: {stats.get('total_dog_events', 0) / days_back:.1f} per day
+• Person Activity Rate: {stats.get('total_person_events', 0) / days_back:.1f} per day
+
+📊 BREAKDOWN:
+• Solo Dog Rate: {(stats.get('dog_only', 0) / max(stats.get('total_dog_events', 1), 1)) * 100:.1f}%
+• Solo Person Rate: {(stats.get('person_only', 0) / max(stats.get('total_person_events', 1), 1)) * 100:.1f}%
+• Accompanied Rate: {(stats.get('dog_and_person', 0) / max(stats.get('total_events', 1), 1)) * 100:.1f}%
+
+💡 INSIGHTS:
+""" + ("• Dogs and people frequently together" if stats.get('dog_person_overlap_pct', 0) > 50 else "• Dogs and people mostly separate") + f"""
+• {"High" if stats.get('total_events', 0) / days_back > 5 else "Moderate" if stats.get('total_events', 0) / days_back > 2 else "Low"} overall activity level
+• {"Dog" if stats.get('total_dog_events', 0) > stats.get('total_person_events', 0) else "Person"} detections more frequent"""
         
-        text_widget = tk.Text(stats_window, font=("Consolas", 11), padx=20, pady=20)
+        text_widget = tk.Text(stats_window, font=("Consolas", 10), padx=20, pady=20, wrap=tk.WORD)
         text_widget.insert('1.0', stats_text)
         text_widget.config(state='disabled')
-        text_widget.pack(fill=tk.BOTH, expand=True)
+        
+        # Add scrollbar
+        scrollbar = ttk.Scrollbar(stats_window, orient="vertical", command=text_widget.yview)
+        text_widget.configure(yscrollcommand=scrollbar.set)
+        
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
     
     def create_heatmap_tab(self, tab_name, detection_type):
         """Create a tab with heatmap for specific detection type"""
@@ -419,8 +508,23 @@ Analysis:
         """Create empty heatmap with message"""
         return np.zeros((7, 24)), {}, {}
     
+    def get_heatmap_title_and_description(self, detection_type):
+        """Get appropriate title and description for each heatmap type"""
+        if detection_type == "dog_only":
+            return "Dogs Only", "Solo dog detections (no people present)"
+        elif detection_type == "person_only":
+            return "Persons Only", "Solo person detections (no dogs present)"
+        elif detection_type == "dog_and_person":
+            return "Dogs & Persons Together", "Both dogs and people detected simultaneously"
+        elif detection_type == "any_dog":
+            return "🐕 All Dogs", "Any detection including dogs (solo + with people)"
+        elif detection_type == "any_person":
+            return "👤 All Persons", "Any detection including people (solo + with dogs)"
+        else:
+            return "All Detections", "Every detection event (dogs, people, or both)"
+    
     def plot_heatmap(self, detection_type, days_back=30):
-        """Plot heatmap for detection type"""
+        """Plot heatmap for detection type with enhanced titles"""
         try:
             # Get figure
             fig = getattr(self, f"fig_{detection_type or 'all'}")
@@ -428,6 +532,9 @@ Analysis:
             
             # Create heatmap data
             hour_day_matrix, hour_counts, day_counts = self.create_heatmap(detection_type, days_back)
+            
+            # Get title and description
+            title, description = self.get_heatmap_title_and_description(detection_type)
             
             # Create subplots
             gs = fig.add_gridspec(2, 2, height_ratios=[3, 1], width_ratios=[3, 1], 
@@ -451,10 +558,12 @@ Analysis:
             ax_main.set_xlabel('Hour of Day')
             ax_main.set_ylabel('Day of Week')
             
-            # Title
-            title = f"Detection Heatmap - {detection_type.replace('_', ' ').title() if detection_type else 'All Detections'}"
-            title += f" (Last {days_back} days)"
-            ax_main.set_title(title)
+            # Enhanced title with description
+            main_title = f"{title} - Last {days_back} days"
+            ax_main.set_title(main_title, fontsize=12, fontweight='bold')
+            
+            # Add subtitle with description
+            fig.suptitle(description, fontsize=10, y=0.95, style='italic')
             
             # Add colorbar
             cbar = fig.colorbar(im, ax=ax_main, shrink=0.8)
@@ -473,7 +582,18 @@ Analysis:
             if hour_counts:
                 hours = list(range(24))
                 counts = [hour_counts.get(h, 0) for h in hours]
-                ax_hour.barh(hours, counts, color='orange', alpha=0.7)
+                
+                # Color based on detection type
+                if detection_type == "any_dog":
+                    color = 'red'
+                elif detection_type == "any_person":
+                    color = 'blue'
+                elif detection_type == "dog_and_person":
+                    color = 'purple'
+                else:
+                    color = 'orange'
+                
+                ax_hour.barh(hours, counts, color=color, alpha=0.7)
                 ax_hour.set_ylabel('Hour of Day')
                 ax_hour.set_xlabel('Count')
                 ax_hour.set_title('Hourly Distribution')
@@ -485,7 +605,18 @@ Analysis:
             if day_counts:
                 days = list(range(7))
                 counts = [day_counts.get(d, 0) for d in days]
-                ax_day.bar(days, counts, color='skyblue', alpha=0.7)
+                
+                # Use same color scheme
+                if detection_type == "any_dog":
+                    color = 'red'
+                elif detection_type == "any_person":
+                    color = 'blue'
+                elif detection_type == "dog_and_person":
+                    color = 'purple'
+                else:
+                    color = 'skyblue'
+                
+                ax_day.bar(days, counts, color=color, alpha=0.7)
                 ax_day.set_xlabel('Day of Week')
                 ax_day.set_ylabel('Count')
                 ax_day.set_title('Daily Distribution')
@@ -493,7 +624,7 @@ Analysis:
                 ax_day.set_xticklabels(day_labels)
                 ax_day.grid(True, alpha=0.3)
             
-            # Statistics (bottom right)
+            # Enhanced statistics (bottom right)
             ax_stats = fig.add_subplot(gs[1, 1])
             ax_stats.axis('off')
             
@@ -503,7 +634,17 @@ Analysis:
                 peak_day = max(day_counts.items(), key=lambda x: x[1])[0] if day_counts else 0
                 peak_day_name = day_labels[peak_day]
                 
-                stats_text = f"""Statistics:
+                # Enhanced stats with detection type context
+                if detection_type in ["any_dog", "any_person"]:
+                    type_label = "🐕 Dogs" if detection_type == "any_dog" else "👤 People"
+                    stats_text = f"""📊 {type_label} Stats:
+Total: {total_detections}
+Peak Hour: {peak_hour:02d}:00
+Peak Day: {peak_day_name}
+Avg/Day: {total_detections/7:.1f}
+Rate: {total_detections/days_back:.1f}/day"""
+                else:
+                    stats_text = f"""📊 Statistics:
 Total: {total_detections}
 Peak Hour: {peak_hour:02d}:00
 Peak Day: {peak_day_name}
@@ -512,7 +653,7 @@ Avg/Day: {total_detections/7:.1f}"""
                 stats_text = "No detections\nin selected period"
             
             ax_stats.text(0.1, 0.9, stats_text, transform=ax_stats.transAxes, 
-                         fontsize=10, verticalalignment='top',
+                         fontsize=9, verticalalignment='top',
                          bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
             
             # Refresh canvas
@@ -523,7 +664,7 @@ Avg/Day: {total_detections/7:.1f}"""
             print(f"Error plotting heatmap: {e}")
     
     def refresh_all_heatmaps(self):
-        """Refresh all heatmaps"""
+        """Refresh all heatmaps including new aggregate views"""
         try:
             days_back = int(self.days_var.get())
         except:
@@ -533,12 +674,17 @@ Avg/Day: {total_detections/7:.1f}"""
         self.plot_heatmap("dog_only", days_back)
         self.plot_heatmap("person_only", days_back)
         self.plot_heatmap("dog_and_person", days_back)
+        
+        # NEW: Plot aggregate views
+        self.plot_heatmap("any_dog", days_back)
+        self.plot_heatmap("any_person", days_back)
+        
         self.plot_heatmap(None, days_back)  # All detections
 
 class DogDetector:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("Dog & Person Detector - Enhanced with Binary Flags & Separate Cooldowns")
+        self.root.title("Dog & Person Detector - Enhanced with All Dogs/Persons Heatmaps")
         self.root.geometry("1300x900")
         
         # Initialize database
@@ -649,10 +795,10 @@ class DogDetector:
         
         # Title
         title_label = ttk.Label(right_frame, text="🐕👤 Enhanced Dog & Person Detector", font=("Arial", 16, "bold"))
-        title_label.pack(pady=(0, 10))
+        title_label.pack(pady=(0, 5))
         
         # Version info
-        version_label = ttk.Label(right_frame, text="v2.0 - Binary Flags & Separate Cooldowns", 
+        version_label = ttk.Label(right_frame, text="v2.1 - Enhanced Heatmaps with All Dogs/Persons", 
                                 font=("Arial", 9), foreground="gray")
         version_label.pack(pady=(0, 10))
         
@@ -710,8 +856,8 @@ class DogDetector:
                                        command=self.view_database)
         self.view_db_button.pack(fill=tk.X, pady=(0, 5))
         
-        # View heatmaps button
-        self.view_heatmaps_button = ttk.Button(button_frame, text="📊 View Heatmaps", 
+        # Enhanced heatmaps button
+        self.view_heatmaps_button = ttk.Button(button_frame, text="📊 Enhanced Heatmaps", 
                                              command=self.view_heatmaps)
         self.view_heatmaps_button.pack(fill=tk.X)
         
@@ -777,9 +923,13 @@ class DogDetector:
                                 font=("Arial", 8), foreground="gray")
         db_path_label.pack(anchor=tk.W)
         
-        schema_label = ttk.Label(db_frame, text="Schema: Binary Flags (v2.0)", 
+        schema_label = ttk.Label(db_frame, text="Schema: Binary Flags (v2.1)", 
                                font=("Arial", 8), foreground="green")
         schema_label.pack(anchor=tk.W)
+        
+        features_label = ttk.Label(db_frame, text="New: All Dogs/Persons Views", 
+                                 font=("Arial", 8), foreground="blue")
+        features_label.pack(anchor=tk.W)
         
         # Log area
         log_frame = ttk.LabelFrame(right_frame, text="Detection Log", padding="5")
@@ -806,7 +956,7 @@ class DogDetector:
         print(message)  # Also print to console
     
     def view_heatmaps(self):
-        """Open heatmap window"""
+        """Open enhanced heatmap window"""
         HeatmapWindow(self.root, self.db_manager)
     
     def view_database(self):
@@ -985,6 +1135,7 @@ class DogDetector:
         
         self.log_message(f"Detection started at location: {self.location} 🐕👤")
         self.log_message(f"Cooldowns - Sound: {self.sound_alert_cooldown}s, Data: {self.data_record_cooldown}s")
+        self.log_message("📊 Enhanced heatmaps now include All Dogs and All Persons views!")
     
     def stop_detection(self):
         """Stop the detection"""
