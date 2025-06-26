@@ -40,12 +40,26 @@ class DatabaseManager:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            # Create detections table
+            # Check if old table exists and migrate if needed
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='detections'")
+            table_exists = cursor.fetchone()
+            
+            if table_exists:
+                # Check if table has old schema
+                cursor.execute("PRAGMA table_info(detections)")
+                columns = [column[1] for column in cursor.fetchall()]
+                
+                if 'detection_type' in columns and 'dog_detected' not in columns:
+                    print("Migrating database to new schema...")
+                    self.migrate_database(cursor)
+            
+            # Create detections table with new schema
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS detections (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp DATETIME NOT NULL,
-                    detection_type TEXT NOT NULL,
+                    dog_detected INTEGER NOT NULL DEFAULT 0,
+                    person_detected INTEGER NOT NULL DEFAULT 0,
                     dog_count INTEGER DEFAULT 0,
                     person_count INTEGER DEFAULT 0,
                     confidence_dog REAL DEFAULT 0.0,
@@ -63,9 +77,60 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error initializing database: {e}")
     
-    def insert_detection(self, detection_type, dog_count=0, person_count=0, 
+    def migrate_database(self, cursor):
+        """Migrate old schema to new binary flag schema"""
+        try:
+            # Create new table with updated schema
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS detections_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp DATETIME NOT NULL,
+                    dog_detected INTEGER NOT NULL DEFAULT 0,
+                    person_detected INTEGER NOT NULL DEFAULT 0,
+                    dog_count INTEGER DEFAULT 0,
+                    person_count INTEGER DEFAULT 0,
+                    confidence_dog REAL DEFAULT 0.0,
+                    confidence_person REAL DEFAULT 0.0,
+                    location TEXT,
+                    device_name TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Migrate data from old table
+            cursor.execute('''
+                INSERT INTO detections_new 
+                (timestamp, dog_detected, person_detected, dog_count, person_count, 
+                 confidence_dog, confidence_person, location, device_name, created_at)
+                SELECT 
+                    timestamp,
+                    CASE 
+                        WHEN detection_type = 'dog_only' THEN 1
+                        WHEN detection_type = 'dog_and_person' THEN 1
+                        ELSE 0
+                    END as dog_detected,
+                    CASE 
+                        WHEN detection_type = 'person_only' THEN 1
+                        WHEN detection_type = 'dog_and_person' THEN 1
+                        ELSE 0
+                    END as person_detected,
+                    dog_count, person_count, confidence_dog, confidence_person,
+                    location, device_name, created_at
+                FROM detections
+            ''')
+            
+            # Replace old table
+            cursor.execute('DROP TABLE detections')
+            cursor.execute('ALTER TABLE detections_new RENAME TO detections')
+            
+            print("Database migration completed successfully!")
+            
+        except Exception as e:
+            print(f"Error during migration: {e}")
+    
+    def insert_detection(self, dog_detected=0, person_detected=0, dog_count=0, person_count=0, 
                         confidence_dog=0.0, confidence_person=0.0, location="Unknown"):
-        """Insert a detection record into the database"""
+        """Insert a detection record into the database with binary flags"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -75,12 +140,13 @@ class DatabaseManager:
             
             cursor.execute('''
                 INSERT INTO detections 
-                (timestamp, detection_type, dog_count, person_count, 
+                (timestamp, dog_detected, person_detected, dog_count, person_count, 
                  confidence_dog, confidence_person, location, device_name)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 datetime.now(),
-                detection_type,
+                dog_detected,
+                person_detected,
                 dog_count,
                 person_count,
                 confidence_dog,
@@ -92,6 +158,16 @@ class DatabaseManager:
             conn.commit()
             record_id = cursor.lastrowid
             conn.close()
+            
+            # Create detection type string for logging
+            if dog_detected and person_detected:
+                detection_type = "dog_and_person"
+            elif dog_detected:
+                detection_type = "dog_only"
+            elif person_detected:
+                detection_type = "person_only"
+            else:
+                detection_type = "none"
             
             print(f"Detection recorded to database: ID {record_id}, Type: {detection_type}")
             return record_id
@@ -121,21 +197,31 @@ class DatabaseManager:
             print(f"Error fetching detections: {e}")
             return []
     
-    def get_heatmap_data(self, detection_type=None, days_back=30):
-        """Get data for time-of-day heatmap"""
+    def get_heatmap_data(self, detection_filter=None, days_back=30):
+        """Get data for time-of-day heatmap with flexible filtering"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
             # Base query
-            query = '''
-                SELECT timestamp, detection_type
-                FROM detections 
+            base_query = '''
+                SELECT timestamp FROM detections 
                 WHERE timestamp >= datetime('now', '-{} days')
             '''.format(days_back)
             
-            if detection_type:
-                query += f" AND detection_type = '{detection_type}'"
+            # Apply filters based on detection type
+            if detection_filter == "dog_only":
+                query = base_query + " AND dog_detected = 1 AND person_detected = 0"
+            elif detection_filter == "person_only":
+                query = base_query + " AND dog_detected = 0 AND person_detected = 1"
+            elif detection_filter == "dog_and_person":
+                query = base_query + " AND dog_detected = 1 AND person_detected = 1"
+            elif detection_filter == "any_dog":
+                query = base_query + " AND dog_detected = 1"
+            elif detection_filter == "any_person":
+                query = base_query + " AND person_detected = 1"
+            else:
+                query = base_query + " AND (dog_detected = 1 OR person_detected = 1)"  # All detections
             
             query += " ORDER BY timestamp"
             
@@ -148,6 +234,50 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error fetching heatmap data: {e}")
             return []
+    
+    def get_detection_stats(self, days_back=30):
+        """Get comprehensive detection statistics"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            date_filter = f"WHERE timestamp >= datetime('now', '-{days_back} days')"
+            
+            stats = {}
+            
+            # Individual counts
+            cursor.execute(f"SELECT COUNT(*) FROM detections {date_filter} AND dog_detected = 1")
+            stats['total_dog_events'] = cursor.fetchone()[0]
+            
+            cursor.execute(f"SELECT COUNT(*) FROM detections {date_filter} AND person_detected = 1")
+            stats['total_person_events'] = cursor.fetchone()[0]
+            
+            # Exclusive counts
+            cursor.execute(f"SELECT COUNT(*) FROM detections {date_filter} AND dog_detected = 1 AND person_detected = 0")
+            stats['dog_only'] = cursor.fetchone()[0]
+            
+            cursor.execute(f"SELECT COUNT(*) FROM detections {date_filter} AND dog_detected = 0 AND person_detected = 1")
+            stats['person_only'] = cursor.fetchone()[0]
+            
+            cursor.execute(f"SELECT COUNT(*) FROM detections {date_filter} AND dog_detected = 1 AND person_detected = 1")
+            stats['dog_and_person'] = cursor.fetchone()[0]
+            
+            # Total events
+            cursor.execute(f"SELECT COUNT(*) FROM detections {date_filter} AND (dog_detected = 1 OR person_detected = 1)")
+            stats['total_events'] = cursor.fetchone()[0]
+            
+            # Overlap percentage
+            if stats['total_dog_events'] > 0:
+                stats['dog_person_overlap_pct'] = (stats['dog_and_person'] / stats['total_dog_events']) * 100
+            else:
+                stats['dog_person_overlap_pct'] = 0
+            
+            conn.close()
+            return stats
+            
+        except Exception as e:
+            print(f"Error getting detection stats: {e}")
+            return {}
 
 class HeatmapWindow:
     def __init__(self, parent, db_manager):
@@ -183,8 +313,51 @@ class HeatmapWindow:
                                command=self.refresh_all_heatmaps)
         refresh_btn.pack(side=tk.LEFT, padx=10)
         
+        # Statistics button
+        stats_btn = ttk.Button(controls_frame, text="Show Statistics", 
+                              command=self.show_statistics)
+        stats_btn.pack(side=tk.LEFT, padx=10)
+        
         # Initial load
         self.refresh_all_heatmaps()
+    
+    def show_statistics(self):
+        """Show detailed statistics window"""
+        try:
+            days_back = int(self.days_var.get())
+        except:
+            days_back = 30
+        
+        stats = self.db_manager.get_detection_stats(days_back)
+        
+        # Create statistics window
+        stats_window = tk.Toplevel(self.window)
+        stats_window.title(f"Detection Statistics (Last {days_back} days)")
+        stats_window.geometry("400x300")
+        
+        # Statistics text
+        stats_text = f"""Detection Statistics (Last {days_back} days)
+
+Total Events: {stats.get('total_events', 0)}
+
+Individual Categories:
+• Dogs Only: {stats.get('dog_only', 0)}
+• Persons Only: {stats.get('person_only', 0)}
+• Dog & Person Together: {stats.get('dog_and_person', 0)}
+
+Overall Totals:
+• Total Dog Events: {stats.get('total_dog_events', 0)}
+• Total Person Events: {stats.get('total_person_events', 0)}
+
+Analysis:
+• Dog-Person Overlap: {stats.get('dog_person_overlap_pct', 0):.1f}%
+• Average Events/Day: {stats.get('total_events', 0) / days_back:.1f}
+"""
+        
+        text_widget = tk.Text(stats_window, font=("Consolas", 11), padx=20, pady=20)
+        text_widget.insert('1.0', stats_text)
+        text_widget.config(state='disabled')
+        text_widget.pack(fill=tk.BOTH, expand=True)
     
     def create_heatmap_tab(self, tab_name, detection_type):
         """Create a tab with heatmap for specific detection type"""
@@ -265,7 +438,6 @@ class HeatmapWindow:
             
             # Day labels
             day_labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-            hour_labels = [f'{h:02d}:00' for h in range(24)]
             
             # Create heatmap
             im = ax_main.imshow(hour_day_matrix, cmap='YlOrRd', aspect='auto', 
@@ -366,7 +538,7 @@ Avg/Day: {total_detections/7:.1f}"""
 class DogDetector:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("Dog & Person Detector - Live Camera Feed with Database & Heatmaps")
+        self.root.title("Dog & Person Detector - Enhanced with Binary Flags & Separate Cooldowns")
         self.root.geometry("1300x900")
         
         # Initialize database
@@ -421,9 +593,14 @@ class DogDetector:
         # Detection variables
         self.dog_detected = False
         self.person_detected = False
-        self.last_alert_time = 0
-        self.alert_cooldown = 2  # seconds between alerts
-        self.last_detection_type = None
+        
+        # Separate cooldown timers
+        self.last_sound_alert_time = 0
+        self.last_data_record_time = 0
+        self.sound_alert_cooldown = 2.0    # Default 2 seconds for sound
+        self.data_record_cooldown = 0.5    # Default 0.5 seconds for data
+        
+        self.last_detection_state = None  # Track detection state changes
         
         # Audio variables
         self.sound_enabled = True
@@ -471,8 +648,13 @@ class DogDetector:
         right_frame.pack_propagate(False)
         
         # Title
-        title_label = ttk.Label(right_frame, text="🐕👤 Dog & Person Detector", font=("Arial", 18, "bold"))
-        title_label.pack(pady=(0, 20))
+        title_label = ttk.Label(right_frame, text="🐕👤 Enhanced Dog & Person Detector", font=("Arial", 16, "bold"))
+        title_label.pack(pady=(0, 10))
+        
+        # Version info
+        version_label = ttk.Label(right_frame, text="v2.0 - Binary Flags & Separate Cooldowns", 
+                                font=("Arial", 9), foreground="gray")
+        version_label.pack(pady=(0, 10))
         
         # Status
         self.status_label = ttk.Label(right_frame, text="Status: Not Running", font=("Arial", 12))
@@ -498,6 +680,11 @@ class DogDetector:
         
         self.total_label = ttk.Label(counters_frame, text="Total Events: 0", font=("Arial", 10, "bold"))
         self.total_label.pack(anchor=tk.W, pady=(5, 0))
+        
+        # Real-time status
+        self.recording_status_label = ttk.Label(counters_frame, text="Recording: Idle", 
+                                              font=("Arial", 9), foreground="blue")
+        self.recording_status_label.pack(anchor=tk.W, pady=(5, 0))
         
         # Buttons frame
         button_frame = ttk.Frame(right_frame)
@@ -538,11 +725,17 @@ class DogDetector:
         location_entry = ttk.Entry(settings_frame, textvariable=self.location_var, width=20)
         location_entry.pack(fill=tk.X, pady=(5, 10))
         
-        # Alert cooldown
-        ttk.Label(settings_frame, text="Alert Cooldown (sec):").pack(anchor=tk.W)
-        self.cooldown_var = tk.StringVar(value="2")
-        cooldown_entry = ttk.Entry(settings_frame, textvariable=self.cooldown_var, width=15)
-        cooldown_entry.pack(fill=tk.X, pady=(5, 10))
+        # Sound alert cooldown
+        ttk.Label(settings_frame, text="Sound Alert Cooldown (sec):").pack(anchor=tk.W)
+        self.sound_cooldown_var = tk.StringVar(value="2.0")
+        sound_cooldown_entry = ttk.Entry(settings_frame, textvariable=self.sound_cooldown_var, width=15)
+        sound_cooldown_entry.pack(fill=tk.X, pady=(5, 5))
+        
+        # Data recording cooldown
+        ttk.Label(settings_frame, text="Data Recording Cooldown (sec):").pack(anchor=tk.W)
+        self.data_cooldown_var = tk.StringVar(value="0.5")
+        data_cooldown_entry = ttk.Entry(settings_frame, textvariable=self.data_cooldown_var, width=15)
+        data_cooldown_entry.pack(fill=tk.X, pady=(5, 10))
         
         # Camera selection
         ttk.Label(settings_frame, text="Camera Index:").pack(anchor=tk.W)
@@ -584,6 +777,10 @@ class DogDetector:
                                 font=("Arial", 8), foreground="gray")
         db_path_label.pack(anchor=tk.W)
         
+        schema_label = ttk.Label(db_frame, text="Schema: Binary Flags (v2.0)", 
+                               font=("Arial", 8), foreground="green")
+        schema_label.pack(anchor=tk.W)
+        
         # Log area
         log_frame = ttk.LabelFrame(right_frame, text="Detection Log", padding="5")
         log_frame.pack(fill=tk.BOTH, expand=True)
@@ -616,22 +813,23 @@ class DogDetector:
         """Show recent database records in a new window"""
         db_window = tk.Toplevel(self.root)
         db_window.title("Recent Detection Records")
-        db_window.geometry("900x600")
+        db_window.geometry("1000x600")
         
         # Create treeview for displaying records
         tree_frame = ttk.Frame(db_window)
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Treeview with scrollbars
-        columns = ("ID", "Timestamp", "Type", "Dogs", "Persons", "Dog Conf", "Person Conf", "Location")
+        columns = ("ID", "Timestamp", "Dog", "Person", "Dog Count", "Person Count", "Dog Conf", "Person Conf", "Location")
         tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=20)
         
         # Configure columns
         tree.heading("ID", text="ID")
         tree.heading("Timestamp", text="Timestamp")
-        tree.heading("Type", text="Detection Type")
-        tree.heading("Dogs", text="Dogs")
-        tree.heading("Persons", text="Persons")
+        tree.heading("Dog", text="Dog")
+        tree.heading("Person", text="Person")
+        tree.heading("Dog Count", text="Dog Count")
+        tree.heading("Person Count", text="Person Count")
         tree.heading("Dog Conf", text="Dog Conf")
         tree.heading("Person Conf", text="Person Conf")
         tree.heading("Location", text="Location")
@@ -639,9 +837,10 @@ class DogDetector:
         # Configure column widths
         tree.column("ID", width=50)
         tree.column("Timestamp", width=150)
-        tree.column("Type", width=120)
-        tree.column("Dogs", width=60)
-        tree.column("Persons", width=70)
+        tree.column("Dog", width=50)
+        tree.column("Person", width=60)
+        tree.column("Dog Count", width=80)
+        tree.column("Person Count", width=90)
         tree.column("Dog Conf", width=80)
         tree.column("Person Conf", width=90)
         tree.column("Location", width=100)
@@ -660,16 +859,17 @@ class DogDetector:
         records = self.db_manager.get_recent_detections(100)  # Get last 100 records
         
         for record in records:
-            # Format the record for display
+            # Format the record for display (updated for new schema)
             formatted_record = (
                 record[0],  # ID
                 record[1],  # Timestamp
-                record[2],  # Detection type
-                record[3],  # Dog count
-                record[4],  # Person count
-                f"{record[5]:.2f}" if record[5] > 0 else "0.00",  # Dog confidence
-                f"{record[6]:.2f}" if record[6] > 0 else "0.00",  # Person confidence
-                record[7] or "Unknown"  # Location
+                "Yes" if record[2] else "No",  # Dog detected
+                "Yes" if record[3] else "No",  # Person detected
+                record[4],  # Dog count
+                record[5],  # Person count
+                f"{record[6]:.2f}" if record[6] > 0 else "0.00",  # Dog confidence
+                f"{record[7]:.2f}" if record[7] > 0 else "0.00",  # Person confidence
+                record[8] or "Unknown"  # Location
             )
             tree.insert("", "end", values=formatted_record)
         
@@ -688,10 +888,13 @@ class DogDetector:
         records = self.db_manager.get_recent_detections(100)
         for record in records:
             formatted_record = (
-                record[0], record[1], record[2], record[3], record[4],
-                f"{record[5]:.2f}" if record[5] > 0 else "0.00",
+                record[0], record[1], 
+                "Yes" if record[2] else "No",
+                "Yes" if record[3] else "No",
+                record[4], record[5],
                 f"{record[6]:.2f}" if record[6] > 0 else "0.00",
-                record[7] or "Unknown"
+                f"{record[7]:.2f}" if record[7] > 0 else "0.00",
+                record[8] or "Unknown"
             )
             tree.insert("", "end", values=formatted_record)
         
@@ -746,7 +949,8 @@ class DogDetector:
     def start_detection(self):
         """Start the detection"""
         try:
-            self.alert_cooldown = float(self.cooldown_var.get())
+            self.sound_alert_cooldown = float(self.sound_cooldown_var.get())
+            self.data_record_cooldown = float(self.data_cooldown_var.get())
             camera_index = int(self.camera_var.get())
             self.confidence_threshold = float(self.confidence_var.get())
             self.location = self.location_var.get() or "Unknown"
@@ -770,11 +974,17 @@ class DogDetector:
         self.stop_button.config(state="normal")
         self.status_label.config(text="Status: Running")
         
+        # Reset timers
+        self.last_sound_alert_time = 0
+        self.last_data_record_time = 0
+        self.last_detection_state = None
+        
         # Start detection thread
         self.detection_thread = threading.Thread(target=self.detection_loop, daemon=True)
         self.detection_thread.start()
         
         self.log_message(f"Detection started at location: {self.location} 🐕👤")
+        self.log_message(f"Cooldowns - Sound: {self.sound_alert_cooldown}s, Data: {self.data_record_cooldown}s")
     
     def stop_detection(self):
         """Stop the detection"""
@@ -787,6 +997,7 @@ class DogDetector:
         self.stop_button.config(state="disabled")
         self.status_label.config(text="Status: Not Running")
         self.detection_label.config(text="No Detection", foreground="green")
+        self.recording_status_label.config(text="Recording: Idle", foreground="blue")
         
         # Clear video display
         self.video_label.config(image='', text="Camera feed stopped\nClick 'Start Detection' to begin", 
@@ -796,7 +1007,7 @@ class DogDetector:
         self.log_message(f"Detection stopped! Total events: {self.total_detections}")
     
     def detection_loop(self):
-        """Main detection loop"""
+        """Main detection loop with separate cooldowns"""
         while self.is_running:
             ret, frame = self.cap.read()
             if not ret:
@@ -855,62 +1066,88 @@ class DogDetector:
                                 cv2.putText(frame, label, (x1, y1-5),
                                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
-            # Determine detection type
+            # Determine current detection state
             dog_count = len(dogs_detected)
             person_count = len(persons_detected)
             
-            current_detection_type = None
-            if dog_count > 0 and person_count > 0:
-                current_detection_type = "dog_and_person"
-            elif dog_count > 0:
-                current_detection_type = "dog_only"
-            elif person_count > 0:
-                current_detection_type = "person_only"
+            current_dog_detected = 1 if dog_count > 0 else 0
+            current_person_detected = 1 if person_count > 0 else 0
+            current_detection_state = (current_dog_detected, current_person_detected)
             
-            # Handle detection events
+            # Handle detection events with separate cooldowns
             current_time = time.time()
-            if current_detection_type and current_detection_type != self.last_detection_type:
-                if current_time - self.last_alert_time > self.alert_cooldown:
-                    # Calculate confidence values
-                    max_dog_confidence = max([d['confidence'] for d in dogs_detected]) if dogs_detected else 0.0
-                    max_person_confidence = max([p['confidence'] for p in persons_detected]) if persons_detected else 0.0
-                    
-                    # Record to database
-                    record_id = self.db_manager.insert_detection(
-                        detection_type=current_detection_type,
-                        dog_count=dog_count,
-                        person_count=person_count,
-                        confidence_dog=max_dog_confidence,
-                        confidence_person=max_person_confidence,
-                        location=self.location
-                    )
-                    
-                    # Update GUI in main thread
-                    self.root.after(0, lambda: self.trigger_alert(current_detection_type, dog_count, person_count))
-                    self.last_alert_time = current_time
-                    
-                    # Play sound if dog is detected (dog_only or dog_and_person)
-                    if "dog" in current_detection_type:
-                        self.play_dog_sound()
             
-            # Update last detection type
-            self.last_detection_type = current_detection_type
+            # Data recording (more frequent)
+            if current_detection_state != self.last_detection_state:
+                if current_time - self.last_data_record_time > self.data_record_cooldown:
+                    if current_dog_detected or current_person_detected:  # Only record actual detections
+                        # Calculate confidence values
+                        max_dog_confidence = max([d['confidence'] for d in dogs_detected]) if dogs_detected else 0.0
+                        max_person_confidence = max([p['confidence'] for p in persons_detected]) if persons_detected else 0.0
+                        
+                        # Record to database
+                        record_id = self.db_manager.insert_detection(
+                            dog_detected=current_dog_detected,
+                            person_detected=current_person_detected,
+                            dog_count=dog_count,
+                            person_count=person_count,
+                            confidence_dog=max_dog_confidence,
+                            confidence_person=max_person_confidence,
+                            location=self.location
+                        )
+                        
+                        if record_id:
+                            self.last_data_record_time = current_time
+                            
+                            # Update GUI counters
+                            self.root.after(0, lambda: self.update_detection_counters(current_dog_detected, current_person_detected))
+                            
+                            # Update recording status
+                            self.root.after(0, lambda: self.recording_status_label.config(
+                                text="Recording: Active", foreground="green"))
+                
+                # Sound alert (less frequent)
+                if current_time - self.last_sound_alert_time > self.sound_alert_cooldown:
+                    if current_dog_detected or current_person_detected:
+                        # Update GUI alert display
+                        self.root.after(0, lambda: self.trigger_visual_alert(current_dog_detected, current_person_detected, dog_count, person_count))
+                        
+                        # Play sound if dog is detected
+                        if current_dog_detected:
+                            self.play_dog_sound()
+                        
+                        self.last_sound_alert_time = current_time
+            
+            # Update last detection state
+            self.last_detection_state = current_detection_state
             
             # Clear alert if nothing detected
-            if not current_detection_type:
+            if not current_dog_detected and not current_person_detected:
                 if self.dog_detected or self.person_detected:
                     self.root.after(0, self.clear_alert)
                 self.dog_detected = False
                 self.person_detected = False
             else:
-                self.dog_detected = dog_count > 0
-                self.person_detected = person_count > 0
+                self.dog_detected = current_dog_detected
+                self.person_detected = current_person_detected
+            
+            # Update recording status to idle if no recent activity
+            if current_time - self.last_data_record_time > 2.0:
+                self.root.after(0, lambda: self.recording_status_label.config(
+                    text="Recording: Idle", foreground="blue"))
             
             # Add detection info to frame
-            if current_detection_type:
+            if current_dog_detected or current_person_detected:
                 status_text = f'DETECTED: {dog_count} Dogs, {person_count} Persons'
                 cv2.putText(frame, status_text, (10, 30),
                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+            
+            # Add cooldown info
+            time_since_data = current_time - self.last_data_record_time
+            time_since_sound = current_time - self.last_sound_alert_time
+            cooldown_text = f'Data: {time_since_data:.1f}s | Sound: {time_since_sound:.1f}s'
+            cv2.putText(frame, cooldown_text, (10, 60),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
             
             # Add timestamp
             timestamp = time.strftime("%H:%M:%S")
@@ -927,31 +1164,35 @@ class DogDetector:
         # Update GUI
         self.root.after(0, self.stop_detection)
     
-    def trigger_alert(self, detection_type, dog_count, person_count):
-        """Trigger detection alert"""
+    def update_detection_counters(self, dog_detected, person_detected):
+        """Update detection counters based on what was detected"""
         self.total_detections += 1
         
-        # Update counters based on detection type
-        if detection_type == "dog_only":
-            self.dog_only_count += 1
-            self.detection_label.config(text="🚨 DOG DETECTED! 🚨", foreground="red")
-            message = f"DOG DETECTED! ({dog_count} dog{'s' if dog_count > 1 else ''})"
-            
-        elif detection_type == "person_only":
-            self.person_only_count += 1
-            self.detection_label.config(text="👤 PERSON DETECTED", foreground="blue")
-            message = f"PERSON DETECTED! ({person_count} person{'s' if person_count > 1 else ''})"
-            
-        elif detection_type == "dog_and_person":
+        # Update counters based on detection flags
+        if dog_detected and person_detected:
             self.dog_and_person_count += 1
-            self.detection_label.config(text="🚨 DOG & PERSON! 🚨", foreground="purple")
-            message = f"DOG & PERSON DETECTED! ({dog_count} dog{'s' if dog_count > 1 else ''}, {person_count} person{'s' if person_count > 1 else ''})"
+        elif dog_detected and not person_detected:
+            self.dog_only_count += 1
+        elif person_detected and not dog_detected:
+            self.person_only_count += 1
         
         # Update counter labels
         self.dog_only_label.config(text=f"Dogs Only: {self.dog_only_count}")
         self.person_only_label.config(text=f"Persons Only: {self.person_only_count}")
         self.both_label.config(text=f"Dog & Person: {self.dog_and_person_count}")
         self.total_label.config(text=f"Total Events: {self.total_detections}")
+    
+    def trigger_visual_alert(self, dog_detected, person_detected, dog_count, person_count):
+        """Trigger visual detection alert"""
+        if dog_detected and person_detected:
+            self.detection_label.config(text="🚨 DOG & PERSON! 🚨", foreground="purple")
+            message = f"DOG & PERSON DETECTED! ({dog_count} dog{'s' if dog_count > 1 else ''}, {person_count} person{'s' if person_count > 1 else ''})"
+        elif dog_detected:
+            self.detection_label.config(text="🚨 DOG DETECTED! 🚨", foreground="red")
+            message = f"DOG DETECTED! ({dog_count} dog{'s' if dog_count > 1 else ''})"
+        elif person_detected:
+            self.detection_label.config(text="👤 PERSON DETECTED", foreground="blue")
+            message = f"PERSON DETECTED! ({person_count} person{'s' if person_count > 1 else ''})"
         
         self.log_message(f"{message} - Recorded to DB")
         print(f"{message}")  # Console output
@@ -994,7 +1235,7 @@ class DogDetector:
     def run(self):
         """Run the application"""
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-        welcome_msg = "Dog & Person Detector with Heatmaps ready! Connect a camera and click 'Start Detection'"
+        welcome_msg = "Enhanced Dog & Person Detector v2.0 ready! 🎯"
         self.log_message(welcome_msg)
         
         if self.dog_sound:
@@ -1002,7 +1243,8 @@ class DogDetector:
         else:
             self.log_message("🔊 Using fallback beep sound (custom MP3 not found)")
         
-        self.log_message(f"Database initialized: {self.db_manager.db_path}")
+        self.log_message(f"Database: {self.db_manager.db_path} (Binary Flags Schema)")
+        self.log_message("✨ New Features: Separate cooldowns, binary flags, enhanced analytics!")
         self.root.mainloop()
     
     def on_closing(self):
@@ -1012,7 +1254,8 @@ class DogDetector:
         self.root.destroy()
 
 if __name__ == "__main__":
-    print("Starting Dog & Person Detector with Database Recording and Heatmaps...")
+    print("Starting Enhanced Dog & Person Detector v2.0...")
+    print("Features: Binary Flags, Separate Cooldowns, Enhanced Analytics")
     print("Make sure you have a webcam connected!")
     
     app = DogDetector()
