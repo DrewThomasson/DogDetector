@@ -13,6 +13,12 @@ import platform
 import sqlite3
 from datetime import datetime
 import socket
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+import seaborn as sns
+from collections import defaultdict
 
 def resource_path(relative_path):
     """Get absolute path to resource, works for dev and for PyInstaller"""
@@ -114,11 +120,253 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error fetching detections: {e}")
             return []
+    
+    def get_heatmap_data(self, detection_type=None, days_back=30):
+        """Get data for time-of-day heatmap"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Base query
+            query = '''
+                SELECT timestamp, detection_type
+                FROM detections 
+                WHERE timestamp >= datetime('now', '-{} days')
+            '''.format(days_back)
+            
+            if detection_type:
+                query += f" AND detection_type = '{detection_type}'"
+            
+            query += " ORDER BY timestamp"
+            
+            cursor.execute(query)
+            records = cursor.fetchall()
+            conn.close()
+            
+            return records
+            
+        except Exception as e:
+            print(f"Error fetching heatmap data: {e}")
+            return []
+
+class HeatmapWindow:
+    def __init__(self, parent, db_manager):
+        self.parent = parent
+        self.db_manager = db_manager
+        self.window = tk.Toplevel(parent)
+        self.window.title("Detection Time Heatmaps")
+        self.window.geometry("1200x800")
+        
+        # Create notebook for tabs
+        self.notebook = ttk.Notebook(self.window)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Create tabs for each detection type
+        self.create_heatmap_tab("Dog Only", "dog_only")
+        self.create_heatmap_tab("Person Only", "person_only")
+        self.create_heatmap_tab("Dog & Person", "dog_and_person")
+        self.create_heatmap_tab("All Detections", None)
+        
+        # Controls frame
+        controls_frame = ttk.Frame(self.window)
+        controls_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Days selection
+        ttk.Label(controls_frame, text="Days to include:").pack(side=tk.LEFT, padx=(0, 5))
+        self.days_var = tk.StringVar(value="30")
+        days_combo = ttk.Combobox(controls_frame, textvariable=self.days_var, 
+                                 values=["7", "14", "30", "60", "90"], width=5)
+        days_combo.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Refresh button
+        refresh_btn = ttk.Button(controls_frame, text="Refresh Heatmaps", 
+                               command=self.refresh_all_heatmaps)
+        refresh_btn.pack(side=tk.LEFT, padx=10)
+        
+        # Initial load
+        self.refresh_all_heatmaps()
+    
+    def create_heatmap_tab(self, tab_name, detection_type):
+        """Create a tab with heatmap for specific detection type"""
+        tab_frame = ttk.Frame(self.notebook)
+        self.notebook.add(tab_frame, text=tab_name)
+        
+        # Create matplotlib figure
+        fig = Figure(figsize=(12, 6), dpi=100)
+        
+        # Store reference to figure and detection type
+        setattr(self, f"fig_{detection_type or 'all'}", fig)
+        setattr(self, f"detection_type_{detection_type or 'all'}", detection_type)
+        
+        # Create canvas
+        canvas = FigureCanvasTkAgg(fig, tab_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # Store canvas reference
+        setattr(self, f"canvas_{detection_type or 'all'}", canvas)
+    
+    def create_heatmap(self, detection_type, days_back=30):
+        """Create heatmap for specific detection type"""
+        try:
+            # Get data from database
+            records = self.db_manager.get_heatmap_data(detection_type, days_back)
+            
+            if not records:
+                return self.create_empty_heatmap(f"No data for {detection_type or 'all detections'}")
+            
+            # Process data into hour/day matrix
+            hour_day_matrix = np.zeros((7, 24))  # 7 days of week, 24 hours
+            hour_counts = defaultdict(int)
+            day_counts = defaultdict(int)
+            
+            for record in records:
+                timestamp_str = record[0]
+                # Parse timestamp
+                try:
+                    dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                except:
+                    # Fallback parsing
+                    dt = datetime.strptime(timestamp_str.split('.')[0], '%Y-%m-%d %H:%M:%S')
+                
+                hour = dt.hour
+                day_of_week = dt.weekday()  # 0 = Monday, 6 = Sunday
+                
+                hour_day_matrix[day_of_week][hour] += 1
+                hour_counts[hour] += 1
+                day_counts[day_of_week] += 1
+            
+            return hour_day_matrix, hour_counts, day_counts
+            
+        except Exception as e:
+            print(f"Error creating heatmap data: {e}")
+            return self.create_empty_heatmap(f"Error loading data: {e}")
+    
+    def create_empty_heatmap(self, message):
+        """Create empty heatmap with message"""
+        return np.zeros((7, 24)), {}, {}
+    
+    def plot_heatmap(self, detection_type, days_back=30):
+        """Plot heatmap for detection type"""
+        try:
+            # Get figure
+            fig = getattr(self, f"fig_{detection_type or 'all'}")
+            fig.clear()
+            
+            # Create heatmap data
+            hour_day_matrix, hour_counts, day_counts = self.create_heatmap(detection_type, days_back)
+            
+            # Create subplots
+            gs = fig.add_gridspec(2, 2, height_ratios=[3, 1], width_ratios=[3, 1], 
+                                hspace=0.3, wspace=0.3)
+            
+            # Main heatmap
+            ax_main = fig.add_subplot(gs[0, 0])
+            
+            # Day labels
+            day_labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+            hour_labels = [f'{h:02d}:00' for h in range(24)]
+            
+            # Create heatmap
+            im = ax_main.imshow(hour_day_matrix, cmap='YlOrRd', aspect='auto', 
+                              interpolation='nearest')
+            
+            # Set labels
+            ax_main.set_xticks(range(24))
+            ax_main.set_xticklabels([f'{h:02d}' for h in range(24)])
+            ax_main.set_yticks(range(7))
+            ax_main.set_yticklabels(day_labels)
+            ax_main.set_xlabel('Hour of Day')
+            ax_main.set_ylabel('Day of Week')
+            
+            # Title
+            title = f"Detection Heatmap - {detection_type.replace('_', ' ').title() if detection_type else 'All Detections'}"
+            title += f" (Last {days_back} days)"
+            ax_main.set_title(title)
+            
+            # Add colorbar
+            cbar = fig.colorbar(im, ax=ax_main, shrink=0.8)
+            cbar.set_label('Detection Count')
+            
+            # Add text annotations for non-zero values
+            for i in range(7):
+                for j in range(24):
+                    if hour_day_matrix[i, j] > 0:
+                        text_color = 'white' if hour_day_matrix[i, j] > hour_day_matrix.max()/2 else 'black'
+                        ax_main.text(j, i, f'{int(hour_day_matrix[i, j])}', 
+                                   ha='center', va='center', color=text_color, fontsize=8)
+            
+            # Hour distribution (right subplot)
+            ax_hour = fig.add_subplot(gs[0, 1])
+            if hour_counts:
+                hours = list(range(24))
+                counts = [hour_counts.get(h, 0) for h in hours]
+                ax_hour.barh(hours, counts, color='orange', alpha=0.7)
+                ax_hour.set_ylabel('Hour of Day')
+                ax_hour.set_xlabel('Count')
+                ax_hour.set_title('Hourly Distribution')
+                ax_hour.set_yticks(range(0, 24, 4))
+                ax_hour.grid(True, alpha=0.3)
+            
+            # Day distribution (bottom subplot)
+            ax_day = fig.add_subplot(gs[1, 0])
+            if day_counts:
+                days = list(range(7))
+                counts = [day_counts.get(d, 0) for d in days]
+                ax_day.bar(days, counts, color='skyblue', alpha=0.7)
+                ax_day.set_xlabel('Day of Week')
+                ax_day.set_ylabel('Count')
+                ax_day.set_title('Daily Distribution')
+                ax_day.set_xticks(range(7))
+                ax_day.set_xticklabels(day_labels)
+                ax_day.grid(True, alpha=0.3)
+            
+            # Statistics (bottom right)
+            ax_stats = fig.add_subplot(gs[1, 1])
+            ax_stats.axis('off')
+            
+            total_detections = int(hour_day_matrix.sum())
+            if total_detections > 0:
+                peak_hour = max(hour_counts.items(), key=lambda x: x[1])[0] if hour_counts else 0
+                peak_day = max(day_counts.items(), key=lambda x: x[1])[0] if day_counts else 0
+                peak_day_name = day_labels[peak_day]
+                
+                stats_text = f"""Statistics:
+Total: {total_detections}
+Peak Hour: {peak_hour:02d}:00
+Peak Day: {peak_day_name}
+Avg/Day: {total_detections/7:.1f}"""
+            else:
+                stats_text = "No detections\nin selected period"
+            
+            ax_stats.text(0.1, 0.9, stats_text, transform=ax_stats.transAxes, 
+                         fontsize=10, verticalalignment='top',
+                         bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
+            
+            # Refresh canvas
+            canvas = getattr(self, f"canvas_{detection_type or 'all'}")
+            canvas.draw()
+            
+        except Exception as e:
+            print(f"Error plotting heatmap: {e}")
+    
+    def refresh_all_heatmaps(self):
+        """Refresh all heatmaps"""
+        try:
+            days_back = int(self.days_var.get())
+        except:
+            days_back = 30
+        
+        # Plot each heatmap
+        self.plot_heatmap("dog_only", days_back)
+        self.plot_heatmap("person_only", days_back)
+        self.plot_heatmap("dog_and_person", days_back)
+        self.plot_heatmap(None, days_back)  # All detections
 
 class DogDetector:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("Dog & Person Detector - Live Camera Feed with Database")
+        self.root.title("Dog & Person Detector - Live Camera Feed with Database & Heatmaps")
         self.root.geometry("1300x900")
         
         # Initialize database
@@ -273,7 +521,12 @@ class DogDetector:
         # View database button
         self.view_db_button = ttk.Button(button_frame, text="View Recent Records", 
                                        command=self.view_database)
-        self.view_db_button.pack(fill=tk.X)
+        self.view_db_button.pack(fill=tk.X, pady=(0, 5))
+        
+        # View heatmaps button
+        self.view_heatmaps_button = ttk.Button(button_frame, text="📊 View Heatmaps", 
+                                             command=self.view_heatmaps)
+        self.view_heatmaps_button.pack(fill=tk.X)
         
         # Settings frame
         settings_frame = ttk.LabelFrame(right_frame, text="Settings", padding="10")
@@ -339,7 +592,7 @@ class DogDetector:
         text_frame = ttk.Frame(log_frame)
         text_frame.pack(fill=tk.BOTH, expand=True)
         
-        self.log_text = tk.Text(text_frame, height=8, width=40, font=("Consolas", 9))
+        self.log_text = tk.Text(text_frame, height=6, width=40, font=("Consolas", 9))
         scrollbar = ttk.Scrollbar(text_frame, orient="vertical", command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scrollbar.set)
         
@@ -354,6 +607,10 @@ class DogDetector:
         self.log_text.insert(tk.END, log_entry)
         self.log_text.see(tk.END)
         print(message)  # Also print to console
+    
+    def view_heatmaps(self):
+        """Open heatmap window"""
+        HeatmapWindow(self.root, self.db_manager)
     
     def view_database(self):
         """Show recent database records in a new window"""
@@ -737,7 +994,7 @@ class DogDetector:
     def run(self):
         """Run the application"""
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-        welcome_msg = "Dog & Person Detector ready! Connect a camera and click 'Start Detection'"
+        welcome_msg = "Dog & Person Detector with Heatmaps ready! Connect a camera and click 'Start Detection'"
         self.log_message(welcome_msg)
         
         if self.dog_sound:
@@ -755,7 +1012,7 @@ class DogDetector:
         self.root.destroy()
 
 if __name__ == "__main__":
-    print("Starting Dog & Person Detector with Database Recording...")
+    print("Starting Dog & Person Detector with Database Recording and Heatmaps...")
     print("Make sure you have a webcam connected!")
     
     app = DogDetector()
