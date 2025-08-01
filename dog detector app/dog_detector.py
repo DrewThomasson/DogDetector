@@ -743,7 +743,7 @@ class DogDetector:
         # Separate cooldown timers
         self.last_sound_alert_time = 0
         self.last_data_record_time = 0
-        self.sound_alert_cooldown = 2.0    # Default 2 seconds for sound
+        self.sound_alert_cooldown = 5.0    # Default 2 seconds for sound
         self.data_record_cooldown = 0.5    # Default 0.5 seconds for data
         
         self.last_detection_state = None  # Track detection state changes
